@@ -128,15 +128,135 @@
             </div>
           </div>
 
+          <!-- Панель фильтров по статусам -->
+          <div class="checklist-toolbar" id="checklist-toolbar">
+            <div class="toolbar-group">
+              <button type="button" class="tool-btn active" id="tool-btn-all" data-filter="all" title="Показать все строки">
+                <span>Все</span>
+              </button>
+              <button type="button" class="tool-btn btn-status-done" id="tool-btn-done" data-filter="done" title="Только выполненные">
+                <span class="status-indicator done"></span>
+                <span>Выполнено</span>
+              </button>
+              <button type="button" class="tool-btn btn-status-pending" id="tool-btn-pending" data-filter="pending" title="Только отложенные">
+                <span class="status-indicator pending"></span>
+                <span>Отложено</span>
+              </button>
+              <button type="button" class="tool-btn btn-status-cancelled" id="tool-btn-cancelled" data-filter="cancelled" title="Только отмененные">
+                <span class="status-indicator cancelled"></span>
+                <span>Отменено</span>
+              </button>
+              <button type="button" class="tool-btn btn-status-clear" id="tool-btn-clear" data-filter="clear" title="Только обычный текст">
+                <span class="status-indicator clear"></span>
+                <span>Обычный</span>
+              </button>
+            </div>
+          </div>
+
           <!-- Поля редактирования -->
           <div class="editor-fields">
             <input type="text" id="note-title-input" class="note-title" placeholder="Заголовок заметки..." autocomplete="off">
-            <textarea id="note-body-input" class="note-body" placeholder="Начните писать заметку здесь..."></textarea>
+            <div id="note-body-input" class="note-body" contenteditable="true" data-placeholder="Начните писать заметку здесь..."></div>
           </div>
         </div>
       </main>
     </section>
   </div>
+
+  <!-- Кастомное контекстное меню -->
+  <div id="custom-context-menu" class="context-menu hidden">
+    <div class="context-menu-section" id="cm-status-section">
+      <div class="context-menu-header">Выделение:</div>
+      <button class="context-menu-item" data-action="status-done">
+        <span class="status-indicator done"></span>
+        <span class="item-label">Выполнено</span>
+        <span class="context-shortcut">Зелёный</span>
+      </button>
+      <button class="context-menu-item" data-action="status-pending">
+        <span class="status-indicator pending"></span>
+        <span class="item-label">Отложено</span>
+        <span class="context-shortcut">Жёлтый</span>
+      </button>
+      <button class="context-menu-item" data-action="status-cancelled">
+        <span class="status-indicator cancelled"></span>
+        <span class="item-label">Отменено</span>
+        <span class="context-shortcut">Красный</span>
+      </button>
+      <button class="context-menu-item" data-action="status-clear">
+        <span class="status-indicator clear"></span>
+        <span class="item-label">Обычный</span>
+        <span class="context-shortcut">Без цвета</span>
+      </button>
+      <div class="context-menu-divider"></div>
+    </div>
+
+    <div class="context-menu-section" id="cm-clipboard-section">
+      <button class="context-menu-item" data-action="cut">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="6" cy="6" r="3"></circle>
+          <circle cx="6" cy="18" r="3"></circle>
+          <line x1="20" y1="4" x2="8.12" y2="15.88"></line>
+          <line x1="14.47" y1="14.48" x2="20" y2="20"></line>
+          <line x1="8.12" y1="8.12" x2="12" y2="12"></line>
+        </svg>
+        <span class="item-label">Вырезать</span>
+        <span class="context-shortcut">Ctrl+X</span>
+      </button>
+      <button class="context-menu-item" data-action="copy">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+        </svg>
+        <span class="item-label">Копировать</span>
+        <span class="context-shortcut">Ctrl+C</span>
+      </button>
+      <button class="context-menu-item" data-action="paste">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path>
+          <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
+        </svg>
+        <span class="item-label">Вставить</span>
+        <span class="context-shortcut">Ctrl+V</span>
+      </button>
+    </div>
+
+    <div class="context-menu-section" id="cm-note-actions-section">
+      <button class="context-menu-item" data-action="save">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+          <polyline points="17 21 17 13 7 13 7 21"></polyline>
+          <polyline points="7 3 7 8 15 8"></polyline>
+        </svg>
+        <span class="item-label">Сохранить</span>
+        <span class="context-shortcut">Ctrl+S</span>
+      </button>
+      <button class="context-menu-item" data-action="new-note">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="12" y1="5" x2="12" y2="19"></line>
+          <line x1="5" y1="12" x2="19" y2="12"></line>
+        </svg>
+        <span class="item-label">Новая заметка</span>
+      </button>
+      <button class="context-menu-item" data-action="open-docs" id="cm-open-docs">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+          <polyline points="15 3 21 3 21 9"></polyline>
+          <line x1="10" y1="14" x2="21" y2="3"></line>
+        </svg>
+        <span class="item-label">В Google Docs</span>
+      </button>
+      <button class="context-menu-item context-menu-item-danger" data-action="delete" id="cm-delete-note">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="3 6 5 6 21 6"></polyline>
+          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+        </svg>
+        <span class="item-label">Удалить заметку</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- Плавающее уведомление (Toast) -->
+  <div id="app-toast" class="app-toast"></div>
 
   <script src="app.js"></script>
 </body>
