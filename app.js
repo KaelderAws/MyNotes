@@ -697,18 +697,9 @@ let currentFilter = 'all';
 function setFilter(filterType) {
   currentFilter = filterType;
 
-  const filterBtns = document.querySelectorAll('.checklist-toolbar .tool-btn');
-  filterBtns.forEach(btn => {
-    if (btn.dataset.filter === filterType) {
-      btn.classList.add('active');
-    } else {
-      btn.classList.remove('active');
-    }
-  });
-
   const statTiles = document.querySelectorAll('.stat-tile');
   statTiles.forEach(tile => {
-    if (tile.dataset.filter === filterType) {
+    if (tile.dataset.filter === filterType && filterType !== 'all') {
       tile.classList.add('active');
     } else {
       tile.classList.remove('active');
@@ -1117,12 +1108,12 @@ manualSaveBtn.addEventListener('click', () => {
 });
 deleteNoteBtn.addEventListener('click', deleteActiveNote);
 
-// Кнопки фильтрации строк: на mousedown предотвращаем снятие фокуса, на click переключаем фильтр
-[toolBtnAll, toolBtnDone, toolBtnPending, toolBtnCancelled, toolBtnClear].forEach(btn => {
+// Кнопки панели форматирования: на mousedown предотвращаем снятие фокуса/выделения, на click применяем статус к выделенному тексту или строке
+[toolBtnDone, toolBtnPending, toolBtnCancelled, toolBtnClear].forEach(btn => {
   if (!btn) return;
   btn.addEventListener('mousedown', (e) => e.preventDefault());
   btn.addEventListener('click', () => {
-    setFilter(btn.dataset.filter);
+    applyStatus(btn.dataset.status);
   });
 });
 
@@ -1165,13 +1156,16 @@ function updateNoteStats() {
     });
   });
 
-  const totalTasks = doneCount + pendingCount + cancelledCount;
+  const totalTasks = doneCount + pendingCount + cancelledCount + clearCount;
   const percent = totalTasks > 0 ? Math.round((doneCount / totalTasks) * 100) : 0;
 
+  const elAll = document.getElementById('stat-count-all');
   const elDone = document.getElementById('stat-count-done');
   const elPending = document.getElementById('stat-count-pending');
   const elCancelled = document.getElementById('stat-count-cancelled');
   const elClear = document.getElementById('stat-count-clear');
+
+  if (elAll) elAll.textContent = totalTasks;
   const elPercent = document.getElementById('progress-percent-label');
   const barDone = document.getElementById('progress-bar-done');
   const barPending = document.getElementById('progress-bar-pending');
@@ -1183,7 +1177,7 @@ function updateNoteStats() {
   if (elClear) elClear.textContent = clearCount;
 
   if (elPercent) {
-    elPercent.textContent = totalTasks > 0 ? `${percent}% выполнено` : 'Нет задач';
+    elPercent.textContent = totalTasks > 0 ? `${percent}% выполнено (${doneCount}/${totalTasks})` : 'Нет задач';
   }
 
   if (barDone && barPending && barCancelled) {

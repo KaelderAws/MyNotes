@@ -129,25 +129,22 @@
             </div>
           </div>
 
-          <!-- Панель фильтров по статусам -->
+          <!-- Панель выделения статусов -->
           <div class="checklist-toolbar" id="checklist-toolbar">
             <div class="toolbar-group">
-              <button type="button" class="tool-btn active" id="tool-btn-all" data-filter="all" title="Показать все строки">
-                <span>Все</span>
-              </button>
-              <button type="button" class="tool-btn btn-status-done" id="tool-btn-done" data-filter="done" title="Только выполненные">
+              <button type="button" class="tool-btn btn-status-done" id="tool-btn-done" data-status="done" title="Выделить как выполненное">
                 <span class="status-indicator done"></span>
                 <span>Выполнено</span>
               </button>
-              <button type="button" class="tool-btn btn-status-pending" id="tool-btn-pending" data-filter="pending" title="Только отложенные">
+              <button type="button" class="tool-btn btn-status-pending" id="tool-btn-pending" data-status="pending" title="Выделить как отложенное">
                 <span class="status-indicator pending"></span>
                 <span>Отложено</span>
               </button>
-              <button type="button" class="tool-btn btn-status-cancelled" id="tool-btn-cancelled" data-filter="cancelled" title="Только отмененные">
+              <button type="button" class="tool-btn btn-status-cancelled" id="tool-btn-cancelled" data-status="cancelled" title="Выделить как отмененное">
                 <span class="status-indicator cancelled"></span>
                 <span>Отменено</span>
               </button>
-              <button type="button" class="tool-btn btn-status-clear" id="tool-btn-clear" data-filter="clear" title="Только обычный текст">
+              <button type="button" class="tool-btn btn-status-clear" id="tool-btn-clear" data-status="clear" title="Снять выделение (обычный текст)">
                 <span class="status-indicator clear"></span>
                 <span>Обычный</span>
               </button>
@@ -184,8 +181,13 @@
                     <div class="stats-progress-label" id="progress-percent-label">Нет задач</div>
                   </div>
 
-                  <!-- Сетка счетчиков -->
+                  <!-- Сетка счетчиков и фильтров -->
                   <div class="stats-grid">
+                    <div class="stat-tile tile-all" data-filter="all" title="Показать все задачи">
+                      <span class="stat-tile-name">Все</span>
+                      <span class="stat-tile-val" id="stat-count-all">0</span>
+                    </div>
+
                     <div class="stat-tile tile-done" data-filter="done" title="Кликните, чтобы отфильтровать">
                       <div class="stat-tile-top">
                         <span class="status-indicator done"></span>

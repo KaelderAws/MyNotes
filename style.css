@@ -612,6 +612,7 @@ body {
   font-weight: 600;
   color: var(--text-main);
   text-align: right;
+  white-space: nowrap;
 }
 
 /* Сетка карточек статусов */
@@ -660,6 +661,24 @@ body {
   font-size: 11px;
   font-weight: 500;
   color: var(--text-muted);
+}
+
+.stat-tile.tile-all {
+  grid-column: span 2;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+}
+
+.stat-tile.tile-all.active {
+  border-color: var(--border-color);
+  box-shadow: none;
+}
+
+.tool-btn:active {
+  transform: translateY(1px);
 }
 
 /* Мета-строки */
