@@ -61,6 +61,9 @@ const toolBtnPending = document.getElementById('tool-btn-pending');
 const toolBtnCancelled = document.getElementById('tool-btn-cancelled');
 const toolBtnClear = document.getElementById('tool-btn-clear');
 
+// Правая колонка статистики
+const editorSidebarRight = document.getElementById('editor-sidebar-right');
+
 // Контекстное меню
 const customContextMenu = document.getElementById('custom-context-menu');
 const cmStatusSection = document.getElementById('cm-status-section');
@@ -347,7 +350,7 @@ function renderDocToEditor(doc) {
         const b = Math.round((bgRgb.blue || 0) * 255);
         lineHtml += `<span style="background-color: rgb(${r},${g},${b});">${escaped}</span>`;
       } else {
-        lineHtml += escaped;
+        lineHtml += `<span class="hl-plain">${escaped}</span>`;
       }
     }
 
@@ -466,6 +469,7 @@ async function selectNote(note) {
     noteBodyInput.innerHTML = renderDocToEditor(doc);
     setEditorEditable(true);
     setFilter('all');
+    updateNoteStats();
   } catch (err) {
     console.error('Ошибка чтения Google Docs:', err);
     noteBodyInput.innerHTML = '<div style="color: var(--danger);">Ошибка при чтении документа Google Docs.</div>';
@@ -583,6 +587,7 @@ async function saveActiveNote() {
     activeNote.modifiedTime = new Date().toISOString();
     renderNotesList(searchInput.value);
     setSyncStatus('saved', 'Сохранено');
+    updateNoteStats();
   } catch (err) {
     console.error('Ошибка сохранения заметки:', err);
     setSyncStatus('error', 'Ошибка сохранения');
@@ -683,6 +688,7 @@ function applyStatus(targetStatus) {
 
   scheduleSave();
   applyFilterToEditor();
+  updateNoteStats();
 }
 
 // --- Фильтрация строк по статусу ---
@@ -700,62 +706,216 @@ function setFilter(filterType) {
     }
   });
 
+  const statTiles = document.querySelectorAll('.stat-tile');
+  statTiles.forEach(tile => {
+    if (tile.dataset.filter === filterType) {
+      tile.classList.add('active');
+    } else {
+      tile.classList.remove('active');
+    }
+  });
+
   applyFilterToEditor();
 }
 
-function applyFilterToEditor() {
-  const children = Array.from(noteBodyInput.children);
-  if (children.length === 0) return;
-
-  children.forEach(child => {
-    if (currentFilter === 'all') {
-      child.style.display = '';
-      return;
-    }
-
-    const hlType = getElementHighlightType(child);
-
-    if (currentFilter === 'done' && hlType === 'done') {
-      child.style.display = '';
-    } else if (currentFilter === 'pending' && hlType === 'pending') {
-      child.style.display = '';
-    } else if (currentFilter === 'cancelled' && hlType === 'cancelled') {
-      child.style.display = '';
-    } else if (currentFilter === 'clear' && hlType === null) {
-      child.style.display = '';
-    } else {
-      child.style.display = 'none';
-    }
-  });
-}
-
-function getElementHighlightType(el) {
+// --- Безопасный для Undo/Redo и DOM анализ сегментов подсветки ---
+function getDirectHighlightType(el) {
   if (!el || el.nodeType !== Node.ELEMENT_NODE) return null;
-
-  const spans = el.querySelectorAll ? el.querySelectorAll('[style*="background-color"], .hl-done, .hl-pending, .hl-cancelled') : [];
-  for (const span of spans) {
-    const bg = span.style?.backgroundColor;
-    if (bg && bg !== 'transparent' && bg !== 'inherit' && bg !== 'rgba(0, 0, 0, 0)') {
-      const rgb = parseRgbString(bg);
-      const type = detectHighlightType(rgb);
-      if (type) return type;
-    }
-    if (span.classList.contains('hl-done')) return 'done';
-    if (span.classList.contains('hl-pending')) return 'pending';
-    if (span.classList.contains('hl-cancelled')) return 'cancelled';
-  }
-
-  const selfBg = el.style?.backgroundColor;
-  if (selfBg && selfBg !== 'transparent' && selfBg !== 'inherit' && selfBg !== 'rgba(0, 0, 0, 0)') {
-    const rgb = parseRgbString(selfBg);
+  const bg = el.style?.backgroundColor;
+  if (bg && bg !== 'transparent' && bg !== 'inherit' && bg !== 'rgba(0, 0, 0, 0)') {
+    const rgb = parseRgbString(bg);
     const type = detectHighlightType(rgb);
     if (type) return type;
   }
   if (el.classList.contains('hl-done')) return 'done';
   if (el.classList.contains('hl-pending')) return 'pending';
   if (el.classList.contains('hl-cancelled')) return 'cancelled';
-
   return null;
+}
+
+function getHighlightTypeOfNode(node, container) {
+  let curr = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
+  while (curr && curr !== container && curr !== noteBodyInput) {
+    const bg = curr.style?.backgroundColor;
+    if (bg && bg !== 'transparent' && bg !== 'inherit' && bg !== 'rgba(0, 0, 0, 0)') {
+      const rgb = parseRgbString(bg);
+      const type = detectHighlightType(rgb);
+      if (type) return type;
+    }
+    if (curr.classList.contains('hl-done')) return 'done';
+    if (curr.classList.contains('hl-pending')) return 'pending';
+    if (curr.classList.contains('hl-cancelled')) return 'cancelled';
+    curr = curr.parentElement;
+  }
+  return 'clear';
+}
+
+function getSegmentsOfNodes(nodes, container) {
+  const segments = [];
+
+  function walk(node) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const text = node.nodeValue || '';
+      if (text.length > 0) {
+        const type = getHighlightTypeOfNode(node, container);
+        if (segments.length > 0 && segments[segments.length - 1].type === type) {
+          segments[segments.length - 1].text += text;
+        } else {
+          segments.push({ type, text });
+        }
+      }
+      return;
+    }
+
+    if (node.nodeType === Node.ELEMENT_NODE) {
+      if (node.tagName.toLowerCase() === 'br') return;
+      for (let child = node.firstChild; child; child = child.nextSibling) {
+        walk(child);
+      }
+    }
+  }
+
+  nodes.forEach(walk);
+  return segments;
+}
+
+// 100% Read-Only: извлекает реальные строки редактора (включая текстовые узлы и блоки)
+function getLinesFromEditor(container) {
+  const lines = [];
+  let currentInlineLine = [];
+
+  function flushInline() {
+    if (currentInlineLine.length > 0) {
+      const line = {
+        isBlock: false,
+        nodes: currentInlineLine
+      };
+      line.segments = getSegmentsOfNodes(currentInlineLine, container);
+      lines.push(line);
+      currentInlineLine = [];
+    }
+  }
+
+  Array.from(container.childNodes).forEach(node => {
+    if (node.nodeType === Node.ELEMENT_NODE && (node.classList.contains('editor-bottom-spacer') || node.classList.contains('notes-list-bottom-spacer'))) {
+      return;
+    }
+
+    if (node.nodeType === Node.ELEMENT_NODE) {
+      const tag = node.tagName.toLowerCase();
+      if (tag === 'div' || tag === 'p' || tag === 'li' || tag.startsWith('h')) {
+        flushInline();
+        const line = {
+          isBlock: true,
+          element: node,
+          nodes: [node]
+        };
+        line.segments = getSegmentsOfNodes([node], container);
+        lines.push(line);
+        return;
+      }
+      if (tag === 'br') {
+        flushInline();
+        return;
+      }
+    }
+    currentInlineLine.push(node);
+  });
+
+  flushInline();
+  return lines;
+}
+
+function applyFilterToEditor() {
+  const lines = getLinesFromEditor(noteBodyInput);
+  if (lines.length === 0) return;
+
+  // 1. Всегда сбрасываем ранее скрытые фильтром отдельные сегменты текста
+  noteBodyInput.querySelectorAll('[data-filter-hidden]').forEach(el => {
+    el.style.display = '';
+    delete el.dataset.filterHidden;
+  });
+
+  // 2. Если выбран фильтр "Все" — отображаем все строки целиком
+  if (currentFilter === 'all') {
+    lines.forEach(line => {
+      if (line.isBlock) {
+        line.element.style.display = '';
+      }
+    });
+    return;
+  }
+
+  // 3. Фильтрация по конкретному статусу
+  lines.forEach(line => {
+    const text = line.segments.map(s => s.text).join('').trim();
+    if (!text) {
+      if (line.isBlock) line.element.style.display = 'none';
+      return;
+    }
+
+    const hasMatchingText = line.segments.some(seg => {
+      const match = (currentFilter === 'clear' && seg.type === 'clear') || (currentFilter === seg.type);
+      return match && seg.text.trim().length > 0;
+    });
+
+    if (!hasMatchingText) {
+      if (line.isBlock) {
+        line.element.style.display = 'none';
+      } else {
+        line.nodes.forEach(n => {
+          if (n.nodeType === Node.ELEMENT_NODE) {
+            n.style.display = 'none';
+            n.dataset.filterHidden = 'true';
+          }
+        });
+      }
+      return;
+    }
+
+    if (line.isBlock) {
+      line.element.style.display = '';
+    } else {
+      line.nodes.forEach(n => {
+        if (n.nodeType === Node.ELEMENT_NODE) {
+          n.style.display = '';
+          delete n.dataset.filterHidden;
+        }
+      });
+    }
+
+    const hasNonMatchingText = line.segments.some(seg => {
+      const match = (currentFilter === 'clear' && seg.type === 'clear') || (currentFilter === seg.type);
+      return !match && seg.text.trim().length > 0;
+    });
+
+    if (!hasNonMatchingText) {
+      return;
+    }
+
+    // Многоцветная строка: скрываем только неподходящие span-элементы через CSS display (без изменения DOM-узлов)
+    const container = line.isBlock ? line.element : noteBodyInput;
+    const childSpans = Array.from(container.querySelectorAll ? container.querySelectorAll('span, font') : []);
+    childSpans.forEach(el => {
+      if (!line.isBlock && !line.nodes.includes(el) && !line.nodes.some(n => n.contains && n.contains(el))) return;
+      const bg = el.style?.backgroundColor;
+      const hasBg = bg && bg !== 'transparent' && bg !== 'inherit' && bg !== 'rgba(0, 0, 0, 0)';
+      const isPlain = el.classList.contains('hl-plain');
+      const isStatus = el.classList.contains('hl-done') || el.classList.contains('hl-pending') || el.classList.contains('hl-cancelled');
+
+      if (hasBg || isPlain || isStatus) {
+        const type = getDirectHighlightType(el) || 'clear';
+        const matches = (currentFilter === 'clear' && type === 'clear') || (currentFilter === type);
+        if (!matches) {
+          el.style.display = 'none';
+          el.dataset.filterHidden = 'true';
+        } else {
+          el.style.display = '';
+          delete el.dataset.filterHidden;
+        }
+      }
+    });
+  });
 }
 
 // --- Кастомное контекстное меню ---
@@ -967,7 +1127,107 @@ deleteNoteBtn.addEventListener('click', deleteActiveNote);
 });
 
 noteTitleInput.addEventListener('input', scheduleSave);
-noteBodyInput.addEventListener('input', scheduleSave);
+noteBodyInput.addEventListener('input', () => {
+  scheduleSave();
+  updateNoteStats();
+});
+
+// --- Подсчёт статистики и метрик заметки (100% Read-Only, без изменения DOM) ---
+function updateNoteStats() {
+  if (!activeNote) return;
+
+  const lines = getLinesFromEditor(noteBodyInput);
+  let doneCount = 0;
+  let pendingCount = 0;
+  let cancelledCount = 0;
+  let clearCount = 0;
+  let totalLines = 0;
+  let totalWords = 0;
+  let totalChars = 0;
+
+  lines.forEach(line => {
+    const fullLineText = line.segments.map(s => s.text).join('');
+    const trimmed = fullLineText.trim();
+    if (!trimmed) return;
+
+    totalLines++;
+    const words = trimmed.split(/\s+/).filter(w => w.length > 0);
+    totalWords += words.length;
+    totalChars += fullLineText.length;
+
+    // Считаем каждый непрерывный участок текста со своим статусом
+    line.segments.forEach(seg => {
+      if (seg.text.trim().length === 0) return; // игнорируем чисто пробельные фрагменты
+      if (seg.type === 'done') doneCount++;
+      else if (seg.type === 'pending') pendingCount++;
+      else if (seg.type === 'cancelled') cancelledCount++;
+      else if (seg.type === 'clear') clearCount++;
+    });
+  });
+
+  const totalTasks = doneCount + pendingCount + cancelledCount;
+  const percent = totalTasks > 0 ? Math.round((doneCount / totalTasks) * 100) : 0;
+
+  const elDone = document.getElementById('stat-count-done');
+  const elPending = document.getElementById('stat-count-pending');
+  const elCancelled = document.getElementById('stat-count-cancelled');
+  const elClear = document.getElementById('stat-count-clear');
+  const elPercent = document.getElementById('progress-percent-label');
+  const barDone = document.getElementById('progress-bar-done');
+  const barPending = document.getElementById('progress-bar-pending');
+  const barCancelled = document.getElementById('progress-bar-cancelled');
+
+  if (elDone) elDone.textContent = doneCount;
+  if (elPending) elPending.textContent = pendingCount;
+  if (elCancelled) elCancelled.textContent = cancelledCount;
+  if (elClear) elClear.textContent = clearCount;
+
+  if (elPercent) {
+    elPercent.textContent = totalTasks > 0 ? `${percent}% выполнено` : 'Нет задач';
+  }
+
+  if (barDone && barPending && barCancelled) {
+    if (totalTasks > 0) {
+      const pDone = (doneCount / totalTasks) * 100;
+      const pPending = (pendingCount / totalTasks) * 100;
+      const pCancelled = (cancelledCount / totalTasks) * 100;
+      barDone.style.width = `${pDone}%`;
+      barPending.style.width = `${pPending}%`;
+      barCancelled.style.width = `${pCancelled}%`;
+    } else {
+      barDone.style.width = '0%';
+      barPending.style.width = '0%';
+      barCancelled.style.width = '0%';
+    }
+  }
+
+  const elLines = document.getElementById('metric-lines-count');
+  const elWords = document.getElementById('metric-words-count');
+  const elChars = document.getElementById('metric-chars-count');
+  if (elLines) elLines.textContent = totalLines;
+  if (elWords) elWords.textContent = totalWords;
+  if (elChars) elChars.textContent = totalChars;
+
+}
+
+// Интерактивные карточки статусов в боковой панели
+document.querySelectorAll('.stat-tile').forEach(tile => {
+  tile.addEventListener('click', () => {
+    const filter = tile.dataset.filter;
+    if (currentFilter === filter) {
+      setFilter('all');
+    } else {
+      setFilter(filter);
+    }
+  });
+});
+
+// Очищаем старый ключ скрытия панели, если остался в localStorage
+localStorage.removeItem('gdocs_stats_hidden');
+if (editorSidebarRight) {
+  editorSidebarRight.classList.remove('hidden');
+}
+
 
 searchInput.addEventListener('input', (e) => {
   renderNotesList(e.target.value);
@@ -992,12 +1252,15 @@ window.addEventListener('keydown', (e) => {
     return;
   }
 
-  // 2. Гарантированный Ctrl+Z / Ctrl+Я (Undo) для русской раскладки
+  // 2. Гарантированный Ctrl+Z / Ctrl+Я (Undo)
   const isZKey = e.code === 'KeyZ' || e.key.toLowerCase() === 'z' || e.key.toLowerCase() === 'я';
-  if (isCtrlOrMeta && !e.shiftKey && isZKey && e.key.toLowerCase() === 'я') {
-    e.preventDefault();
-    document.execCommand('undo');
-    scheduleSave();
+  if (isCtrlOrMeta && !e.shiftKey && isZKey) {
+    if (e.key.toLowerCase() === 'я') {
+      e.preventDefault();
+      document.execCommand('undo');
+      scheduleSave();
+    }
+    setTimeout(updateNoteStats, 30);
     return;
   }
 

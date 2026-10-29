@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Google Docs Notes</title>
+  <title>MyNotes</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -79,6 +79,7 @@
         <div class="notes-list-container">
           <div id="notes-loading" class="status-msg">Загрузка заметок из Google Docs...</div>
           <ul id="notes-list" class="notes-list"></ul>
+          <div class="notes-list-bottom-spacer"></div>
         </div>
       </aside>
 
@@ -153,10 +154,97 @@
             </div>
           </div>
 
-          <!-- Поля редактирования -->
-          <div class="editor-fields">
-            <input type="text" id="note-title-input" class="note-title" placeholder="Заголовок заметки..." autocomplete="off">
-            <div id="note-body-input" class="note-body" contenteditable="true" data-placeholder="Начните писать заметку здесь..."></div>
+          <!-- Основная область: редактор + панель статистики справа -->
+          <div class="editor-body-layout">
+            <!-- Поля редактирования -->
+            <div class="editor-fields">
+              <input type="text" id="note-title-input" class="note-title" placeholder="Заголовок заметки..." autocomplete="off">
+              <div id="note-body-input" class="note-body" contenteditable="true" data-placeholder="Начните писать заметку здесь..."></div>
+              <div class="editor-bottom-spacer"></div>
+            </div>
+
+            <!-- Правая колонка: статистика и инфо -->
+            <aside class="editor-sidebar-right" id="editor-sidebar-right">
+              <div class="sidebar-right-header">
+                <span class="sidebar-right-title">Статистика заметки</span>
+
+              </div>
+
+              <div class="sidebar-right-content">
+                <!-- Прогресс задач -->
+                <div class="stats-card-group">
+                  <div class="stats-group-label">Прогресс задач</div>
+                  
+                  <div class="stats-progress-box">
+                    <div class="stats-progress-track">
+                      <div class="stats-progress-segment done" id="progress-bar-done" style="width: 0%;"></div>
+                      <div class="stats-progress-segment pending" id="progress-bar-pending" style="width: 0%;"></div>
+                      <div class="stats-progress-segment cancelled" id="progress-bar-cancelled" style="width: 0%;"></div>
+                    </div>
+                    <div class="stats-progress-label" id="progress-percent-label">Нет задач</div>
+                  </div>
+
+                  <!-- Сетка счетчиков -->
+                  <div class="stats-grid">
+                    <div class="stat-tile tile-done" data-filter="done" title="Кликните, чтобы отфильтровать">
+                      <div class="stat-tile-top">
+                        <span class="status-indicator done"></span>
+                        <span class="stat-tile-val" id="stat-count-done">0</span>
+                      </div>
+                      <span class="stat-tile-name">Выполнено</span>
+                    </div>
+
+                    <div class="stat-tile tile-pending" data-filter="pending" title="Кликните, чтобы отфильтровать">
+                      <div class="stat-tile-top">
+                        <span class="status-indicator pending"></span>
+                        <span class="stat-tile-val" id="stat-count-pending">0</span>
+                      </div>
+                      <span class="stat-tile-name">Отложено</span>
+                    </div>
+
+                    <div class="stat-tile tile-cancelled" data-filter="cancelled" title="Кликните, чтобы отфильтровать">
+                      <div class="stat-tile-top">
+                        <span class="status-indicator cancelled"></span>
+                        <span class="stat-tile-val" id="stat-count-cancelled">0</span>
+                      </div>
+                      <span class="stat-tile-name">Отменено</span>
+                    </div>
+
+                    <div class="stat-tile tile-clear" data-filter="clear" title="Кликните, чтобы отфильтровать">
+                      <div class="stat-tile-top">
+                        <span class="status-indicator clear"></span>
+                        <span class="stat-tile-val" id="stat-count-clear">0</span>
+                      </div>
+                      <span class="stat-tile-name">Обычный</span>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Метрики текста -->
+                <div class="stats-card-group">
+                  <div class="stats-group-label">Метрики текста</div>
+                  <div class="stats-meta-rows">
+                    <div class="stats-meta-row">
+                      <span class="meta-label">Строк:</span>
+                      <span class="meta-val" id="metric-lines-count">0</span>
+                    </div>
+                    <div class="stats-meta-row">
+                      <span class="meta-label">Слов:</span>
+                      <span class="meta-val" id="metric-words-count">0</span>
+                    </div>
+                    <div class="stats-meta-row">
+                      <span class="meta-label">Символов:</span>
+                      <span class="meta-val" id="metric-chars-count">0</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Картинка под статистикой (до упора вниз) -->
+              <div class="sidebar-right-image-container">
+                <img src="boykisser-1024x1408.png?v=2" alt="Mascot" class="sidebar-right-mascot">
+              </div>
+            </aside>
           </div>
         </div>
       </main>
