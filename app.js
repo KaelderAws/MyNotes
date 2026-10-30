@@ -82,6 +82,35 @@ const sessionRenewBtn = document.getElementById('session-renew-btn');
 let refreshTimer = null;
 let tokenRefreshPromise = null;
 
+// --- Локальное резервное копирование черновиков (защита от потери при F5 / сбоях сети) ---
+function saveLocalDraft(noteId, title, html) {
+  if (!noteId) return;
+  try {
+    localStorage.setItem(`gdocs_draft_${noteId}`, JSON.stringify({
+      title,
+      html,
+      timestamp: Date.now()
+    }));
+  } catch (_) {}
+}
+
+function getLocalDraft(noteId) {
+  if (!noteId) return null;
+  try {
+    const raw = localStorage.getItem(`gdocs_draft_${noteId}`);
+    return raw ? JSON.parse(raw) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function clearLocalDraft(noteId) {
+  if (!noteId) return;
+  try {
+    localStorage.removeItem(`gdocs_draft_${noteId}`);
+  } catch (_) {}
+}
+
 // --- Проверка необходимости обновления токена ---
 function isTokenExpiringSoon() {
   if (!accessToken || !tokenExpiresAt) return true;
@@ -89,7 +118,7 @@ function isTokenExpiringSoon() {
   return Date.now() > (Number(tokenExpiresAt) - 8 * 60 * 1000);
 }
 
-// Запрос свежего access_token через Google Identity Services
+// Запрос свежего access_token через Google Identity Services с жестким таймаутом
 function requestFreshToken(interactive = false) {
   if (tokenRefreshPromise) return tokenRefreshPromise;
 
@@ -100,10 +129,19 @@ function requestFreshToken(interactive = false) {
     }
 
     const emailHint = localStorage.getItem('gdocs_user_email') || '';
-
-    // Временно подменяем callback клиента, чтобы перехватить конкретный ответ
     const prevCallback = tokenClient.callback;
+
+    // Жесткий таймаут: фоновые тихие запросы без клика браузер блокирует за 0.1с,
+    // поэтому не даём промису зависнуть дольше 3.5 секунд. Для интерактивных кликов ждём до 60 секунд.
+    const timeoutMs = interactive ? 60000 : 3500;
+    const timeoutId = setTimeout(() => {
+      tokenClient.callback = prevCallback;
+      tokenRefreshPromise = null;
+      reject(new Error('Время ожидания ответа Google истекло (окно заблокировано браузером)'));
+    }, timeoutMs);
+
     tokenClient.callback = (resp) => {
+      clearTimeout(timeoutId);
       tokenClient.callback = prevCallback;
       tokenRefreshPromise = null;
 
@@ -122,6 +160,7 @@ function requestFreshToken(interactive = false) {
         hint: emailHint
       });
     } catch (err) {
+      clearTimeout(timeoutId);
       tokenClient.callback = prevCallback;
       tokenRefreshPromise = null;
       reject(err);
@@ -162,26 +201,44 @@ function hideSessionExpiredBanner() {
   }
 }
 
-if (sessionRenewBtn) {
-  sessionRenewBtn.addEventListener('click', async () => {
-    try {
+// Интерактивное обновление сессии по клику пользователя (гарантированный user gesture)
+async function renewSessionInteractive() {
+  try {
+    if (sessionRenewBtn) {
       sessionRenewBtn.disabled = true;
       sessionRenewBtn.textContent = 'Обновление...';
-      await requestFreshToken(true);
-      hideSessionExpiredBanner();
-      showToast('Сессия успешно обновлена', 'success');
-      if (activeNote && isDirty) {
-        saveActiveNote();
-      }
-    } catch (err) {
-      console.error('Ошибка ручного обновления сессии:', err);
-      showToast('Не удалось обновить сессию: ' + err.message, 'error');
-    } finally {
+    }
+    setSyncStatus('saving', 'Обновление сессии...');
+    await requestFreshToken(true);
+    hideSessionExpiredBanner();
+    showToast('Сессия успешно обновлена!', 'success');
+
+    if (activeNote && isDirty) {
+      await saveActiveNote();
+    } else {
+      setSyncStatus('saved', 'Сохранено');
+    }
+  } catch (err) {
+    console.error('Ошибка ручного обновления сессии:', err);
+    showToast('Не удалось обновить сессию: ' + err.message, 'error');
+    setSyncStatus('error', 'Сессия истекла — нажмите для сохранения');
+  } finally {
+    if (sessionRenewBtn) {
       sessionRenewBtn.disabled = false;
       sessionRenewBtn.textContent = 'Обновить сессию';
     }
-  });
+  }
 }
+
+if (sessionRenewBtn) {
+  sessionRenewBtn.addEventListener('click', renewSessionInteractive);
+}
+
+syncStatusEl.addEventListener('click', () => {
+  if (syncStatusEl.classList.contains('error')) {
+    renewSessionInteractive();
+  }
+});
 
 // --- Инициализация Google Identity Services ---
 async function initGoogleAuth() {
@@ -272,13 +329,6 @@ function showAuthScreen() {
 
 // --- Google API Helper ---
 async function apiFetch(url, options = {}, isRetry = false) {
-  // Если токен скоро истечет, пробуем превентивно обновить его
-  if (accessToken && isTokenExpiringSoon() && !isRetry) {
-    try {
-      await requestFreshToken(false);
-    } catch (_) {}
-  }
-
   const headers = {
     Authorization: `Bearer ${accessToken}`,
     ...(options.headers || {})
@@ -286,21 +336,23 @@ async function apiFetch(url, options = {}, isRetry = false) {
 
   const response = await fetch(url, { ...options, headers });
 
-  // При истечении сессии (401) не разлогиниваемся, а пробуем обновить токен и повторить запрос
+  // При истечении сессии (401) не разлогиниваемся, а пробуем тихо обновить токен и повторить запрос
   if (response.status === 401 && !isRetry) {
     console.warn('Токен Google истек (401). Попытка автоматического обновления токена...');
     try {
       await requestFreshToken(false);
       return await apiFetch(url, options, true);
     } catch (err) {
-      console.warn('Тихое обновление токена не удалось, показываем баннер:', err);
+      console.warn('Тихое фоновое обновление токена отклонено браузером (требуется клик):', err.message);
       showSessionExpiredBanner();
+      setSyncStatus('error', 'Сессия истекла — нажмите для сохранения');
       throw new Error('Сессия Google истекла. Нажмите «Обновить сессию», чтобы сохранить данные.');
     }
   }
 
   if (response.status === 401 && isRetry) {
     showSessionExpiredBanner();
+    setSyncStatus('error', 'Сессия истекла — нажмите для сохранения');
     throw new Error('Сессия истекла. Пожалуйста, обновите вход.');
   }
 
@@ -697,13 +749,30 @@ async function selectNote(note) {
       return;
     }
 
-    noteBodyInput.innerHTML = renderDocToEditor(doc);
-    setEditorEditable(true);
-    setFilter('all');
-    updateNoteStats();
-    isLoadingNote = false;
-    isDirty = false;
-    setSyncStatus('saved', 'Загружено');
+    const localDraft = getLocalDraft(note.id);
+    const serverModified = new Date(note.modifiedTime || 0).getTime();
+
+    if (localDraft && localDraft.html && localDraft.timestamp > serverModified) {
+      console.log(`Обнаружен несохранённый локальный черновик для заметки ${note.id}`);
+      noteTitleInput.value = localDraft.title || note.name || '';
+      noteBodyInput.innerHTML = localDraft.html;
+      setEditorEditable(true);
+      setFilter('all');
+      updateNoteStats();
+      isLoadingNote = false;
+      isDirty = true;
+      setSyncStatus('error', 'Черновик восстановлен — сохраните');
+      showToast('Восстановлены несохранённые изменения из локального черновика', 'info');
+    } else {
+      noteBodyInput.innerHTML = renderDocToEditor(doc);
+      setEditorEditable(true);
+      setFilter('all');
+      updateNoteStats();
+      isLoadingNote = false;
+      isDirty = false;
+      setSyncStatus('saved', 'Загружено');
+      clearLocalDraft(note.id);
+    }
   } catch (err) {
     if (currentToken !== noteLoadToken || activeNote?.id !== note.id) {
       return;
@@ -887,6 +956,9 @@ async function performSave(noteToSave, newTitle, newContent, highlights) {
 
     renderNotesList(searchInput.value);
 
+    // Очищаем локальный черновик после успешного сохранения в облаке
+    clearLocalDraft(noteId);
+
     // Если эта заметка всё ещё открыта в редакторе, обновляем статус и статистику
     if (activeNote && activeNote.id === noteId) {
       setSyncStatus('saved', 'Сохранено');
@@ -895,8 +967,13 @@ async function performSave(noteToSave, newTitle, newContent, highlights) {
   } catch (err) {
     console.error(`Ошибка сохранения заметки (${noteId}):`, err);
     if (activeNote && activeNote.id === noteId) {
-      setSyncStatus('error', 'Ошибка сохранения');
-      showToast('Ошибка сохранения в Google Docs', 'error');
+      if (err.message && err.message.includes('Сессия')) {
+        setSyncStatus('error', 'Сессия истекла — нажмите для сохранения');
+        showSessionExpiredBanner();
+      } else {
+        setSyncStatus('error', 'Ошибка сохранения');
+        showToast('Ошибка сохранения в Google Docs: ' + err.message, 'error');
+      }
     }
     throw err;
   }
@@ -918,7 +995,7 @@ async function saveActiveNote() {
 }
 
 // Ручное сохранение по кнопке "Сохранить", Ctrl+S или из контекстного меню
-function manualSave() {
+async function manualSave() {
   if (!activeNote) {
     showToast('Нет открытой заметки для сохранения', 'info');
     return;
@@ -929,6 +1006,14 @@ function manualSave() {
   }
   clearTimeout(saveTimeout);
   saveTimeout = null;
+
+  // Если сессия истекла или токен недействителен, ручное сохранение запускает интерактивное продление
+  if (!accessToken || Date.now() >= Number(tokenExpiresAt)) {
+    console.log('Ручное сохранение при истёкшей сессии: интерактивное обновление токена...');
+    await renewSessionInteractive();
+    return;
+  }
+
   saveActiveNote();
 }
 
@@ -936,6 +1021,7 @@ function manualSave() {
 function scheduleSave() {
   if (!activeNote || isLoadingNote) return;
   isDirty = true;
+  saveLocalDraft(activeNote.id, noteTitleInput.value, noteBodyInput.innerHTML);
   setSyncStatus('saving', 'Сохранение...');
   clearTimeout(saveTimeout);
   saveTimeout = setTimeout(saveActiveNote, 1000);
@@ -1638,6 +1724,60 @@ window.addEventListener('beforeunload', (e) => {
     e.returnValue = '';
   }
 });
+
+// --- Интерактивный маскот (Popcat эффект) ---
+const mascotContainer = document.getElementById('mascot-container');
+if (mascotContainer) {
+  const popSounds = ['pop1.mp3', 'pop2.mp3', 'pop3.mp3', 'pop4.mp3'].map(src => {
+    const audio = new Audio(src);
+    audio.preload = 'auto';
+    return audio;
+  });
+
+  let lastSoundIdx = -1;
+  function playPopSound() {
+    let idx;
+    do {
+      idx = Math.floor(Math.random() * popSounds.length);
+    } while (idx === lastSoundIdx && popSounds.length > 1);
+    lastSoundIdx = idx;
+
+    try {
+      const sound = popSounds[idx].cloneNode();
+      sound.volume = 0.65;
+      sound.play().catch(() => {});
+    } catch (_) {}
+  }
+
+  let isMascotPressed = false;
+
+  function openMascot(e) {
+    if (e && e.button !== undefined && e.button !== 0) return; // только ЛКМ
+    if (isMascotPressed) return;
+    isMascotPressed = true;
+    mascotContainer.classList.add('is-open');
+    playPopSound();
+  }
+
+  function closeMascot() {
+    if (!isMascotPressed) return;
+    isMascotPressed = false;
+    mascotContainer.classList.remove('is-open');
+  }
+
+  mascotContainer.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    openMascot(e);
+  });
+
+  mascotContainer.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+  });
+
+  window.addEventListener('pointerup', closeMascot);
+  window.addEventListener('pointercancel', closeMascot);
+  window.addEventListener('blur', closeMascot);
+}
 
 // Старт приложения
 window.addEventListener('DOMContentLoaded', initGoogleAuth);

@@ -372,6 +372,15 @@ body {
 .sync-status.error .status-dot {
   background-color: var(--danger);
 }
+.sync-status.error {
+  cursor: pointer;
+  color: var(--danger);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.sync-status.error:hover {
+  opacity: 0.8;
+}
 
 @keyframes pulse {
   0% { opacity: 1; }
@@ -540,14 +549,19 @@ body {
   margin: 0;
   padding: 0;
   line-height: 0;
-  display: flex;
-  justify-content: center;
-  align-items: flex-end;
+  display: grid;
+  place-items: end center;
   flex-shrink: 0;
   width: 100%;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+  transform: translateY(18px);
 }
 
 .sidebar-right-mascot {
+  grid-area: 1 / 1;
   display: block;
   width: 100%;
   max-height: 250px;
@@ -557,7 +571,34 @@ body {
   vertical-align: bottom;
   filter: drop-shadow(0 -2px 8px rgba(0, 0, 0, 0.05));
   user-select: none;
+  -webkit-user-drag: none;
   pointer-events: none;
+  transform-origin: bottom center;
+  transition: transform 0.06s ease-out;
+}
+
+.sidebar-right-mascot.mascot-closed {
+  opacity: 1;
+}
+
+.sidebar-right-mascot.mascot-open {
+  opacity: 0;
+}
+
+/* При нажатии и удержании открываем рот и делаем легкий пружинящий эффект */
+.sidebar-right-image-container.is-open .mascot-closed,
+.sidebar-right-image-container:active .mascot-closed {
+  opacity: 0;
+}
+
+.sidebar-right-image-container.is-open .mascot-open,
+.sidebar-right-image-container:active .mascot-open {
+  opacity: 1;
+}
+
+.sidebar-right-image-container.is-open .sidebar-right-mascot,
+.sidebar-right-image-container:active .sidebar-right-mascot {
+  transform: scale(0.98);
 }
 
 .stats-card-group {
