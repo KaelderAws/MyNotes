@@ -40,6 +40,19 @@
       </div>
     </section>
 
+    <!-- Плавающий баннер обновления сессии -->
+    <div id="session-banner" class="session-banner hidden">
+      <div class="session-banner-content">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"></circle>
+          <line x1="12" y1="8" x2="12" y2="12"></line>
+          <line x1="12" y1="16" x2="12.01" y2="16"></line>
+        </svg>
+        <span>Сессия Google истекла. Нажмите кнопку, чтобы продолжить работу без потери правок.</span>
+      </div>
+      <button id="session-renew-btn" class="btn btn-primary btn-sm">Обновить сессию</button>
+    </div>
+
     <!-- Основной интерфейс приложения -->
     <section id="main-screen" class="screen app-layout hidden">
       <!-- Боковая панель -->

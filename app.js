@@ -30,8 +30,11 @@ let tokenExpiresAt = localStorage.getItem('gdocs_token_expires') || 0;
 let notesFolderId = null;
 let notesList = [];
 let activeNote = null;
+let isDirty = false;
+let isLoadingNote = false;
+let noteLoadToken = 0;
 let saveTimeout = null;
-let isSaving = false;
+const saveQueueByNoteId = new Map();
 
 // DOM Элементы
 const authScreen = document.getElementById('auth-screen');
@@ -72,8 +75,116 @@ const cmNoteActionsSection = document.getElementById('cm-note-actions-section');
 const cmOpenDocsBtn = document.getElementById('cm-open-docs');
 const cmDeleteNoteBtn = document.getElementById('cm-delete-note');
 
+// Баннер обновления сессии
+const sessionBanner = document.getElementById('session-banner');
+const sessionRenewBtn = document.getElementById('session-renew-btn');
+
+let refreshTimer = null;
+let tokenRefreshPromise = null;
+
+// --- Проверка необходимости обновления токена ---
+function isTokenExpiringSoon() {
+  if (!accessToken || !tokenExpiresAt) return true;
+  // Если осталось менее 8 минут
+  return Date.now() > (Number(tokenExpiresAt) - 8 * 60 * 1000);
+}
+
+// Запрос свежего access_token через Google Identity Services
+function requestFreshToken(interactive = false) {
+  if (tokenRefreshPromise) return tokenRefreshPromise;
+
+  tokenRefreshPromise = new Promise((resolve, reject) => {
+    if (!tokenClient) {
+      tokenRefreshPromise = null;
+      return reject(new Error('Google Auth клиент не готов'));
+    }
+
+    const emailHint = localStorage.getItem('gdocs_user_email') || '';
+
+    // Временно подменяем callback клиента, чтобы перехватить конкретный ответ
+    const prevCallback = tokenClient.callback;
+    tokenClient.callback = (resp) => {
+      tokenClient.callback = prevCallback;
+      tokenRefreshPromise = null;
+
+      if (resp.error) {
+        reject(new Error(resp.error));
+        return;
+      }
+
+      handleTokenResponse(resp);
+      resolve(resp.access_token);
+    };
+
+    try {
+      tokenClient.requestAccessToken({
+        prompt: '', // Пустая строка = без повторного окна согласия/разрешений!
+        hint: emailHint
+      });
+    } catch (err) {
+      tokenClient.callback = prevCallback;
+      tokenRefreshPromise = null;
+      reject(err);
+    }
+  });
+
+  return tokenRefreshPromise;
+}
+
+// Планирование обновления токена за 5 минут до истечения
+function scheduleTokenRefresh(delayMs) {
+  clearTimeout(refreshTimer);
+  const timeLeft = Number(tokenExpiresAt) - Date.now();
+  const delay = typeof delayMs === 'number' ? delayMs : Math.max(10000, timeLeft - 5 * 60 * 1000);
+
+  refreshTimer = setTimeout(async () => {
+    if (accessToken) {
+      console.log('Плановое обновление токена Google за 5 минут до истечения...');
+      try {
+        await requestFreshToken(false);
+      } catch (err) {
+        console.warn('Фоновое обновление токена отложено до действия пользователя:', err);
+      }
+    }
+  }, delay);
+}
+
+// Показ и скрытие баннера истекшей сессии
+function showSessionExpiredBanner() {
+  if (sessionBanner) {
+    sessionBanner.classList.remove('hidden');
+  }
+}
+
+function hideSessionExpiredBanner() {
+  if (sessionBanner) {
+    sessionBanner.classList.add('hidden');
+  }
+}
+
+if (sessionRenewBtn) {
+  sessionRenewBtn.addEventListener('click', async () => {
+    try {
+      sessionRenewBtn.disabled = true;
+      sessionRenewBtn.textContent = 'Обновление...';
+      await requestFreshToken(true);
+      hideSessionExpiredBanner();
+      showToast('Сессия успешно обновлена', 'success');
+      if (activeNote && isDirty) {
+        saveActiveNote();
+      }
+    } catch (err) {
+      console.error('Ошибка ручного обновления сессии:', err);
+      showToast('Не удалось обновить сессию: ' + err.message, 'error');
+    } finally {
+      sessionRenewBtn.disabled = false;
+      sessionRenewBtn.textContent = 'Обновить сессию';
+    }
+  });
+}
+
 // --- Инициализация Google Identity Services ---
-function initGoogleAuth() {
+async function initGoogleAuth() {
   if (typeof google === 'undefined') {
     setTimeout(initGoogleAuth, 100);
     return;
@@ -85,36 +196,64 @@ function initGoogleAuth() {
     callback: handleTokenResponse,
   });
 
-  // Проверяем, есть ли действующий токен
-  if (accessToken && Date.now() < tokenExpiresAt) {
+  // 1. Проверяем, есть ли действующий токен в памяти
+  if (accessToken && Date.now() < Number(tokenExpiresAt)) {
+    scheduleTokenRefresh();
     onAuthenticated();
-  } else {
-    showAuthScreen();
+    return;
   }
+
+  // 2. Если токен истёк, но пользователь ранее уже авторизовывался (есть email)
+  const savedEmail = localStorage.getItem('gdocs_user_email');
+  if (savedEmail) {
+    try {
+      console.log('Попытка тихого восстановления сессии для:', savedEmail);
+      await requestFreshToken(false);
+      return;
+    } catch (err) {
+      console.log('Тихое восстановление сессии отклонено браузером (требуется клик):', err.message);
+    }
+  }
+
+  showAuthScreen();
 }
 
 function handleLogin() {
   if (!tokenClient) return;
-  tokenClient.requestAccessToken({ prompt: 'consent' });
+  const emailHint = localStorage.getItem('gdocs_user_email') || '';
+  tokenClient.requestAccessToken({
+    prompt: '',
+    hint: emailHint
+  });
 }
 
 function handleTokenResponse(resp) {
   if (resp.error) {
     console.error('Ошибка авторизации:', resp);
-    alert('Не удалось авторизоваться в Google: ' + resp.error);
+    if (resp.error !== 'popup_closed_by_user' && resp.error !== 'popup_blocked_by_browser') {
+      alert('Не удалось авторизоваться в Google: ' + resp.error);
+    }
     return;
   }
   accessToken = resp.access_token;
   tokenExpiresAt = Date.now() + (resp.expires_in * 1000);
   localStorage.setItem('gdocs_access_token', accessToken);
   localStorage.setItem('gdocs_token_expires', tokenExpiresAt);
+  hideSessionExpiredBanner();
+  scheduleTokenRefresh((resp.expires_in - 300) * 1000);
   onAuthenticated();
 }
 
 function handleLogout() {
   accessToken = null;
+  tokenExpiresAt = 0;
+  clearTimeout(refreshTimer);
   localStorage.removeItem('gdocs_access_token');
   localStorage.removeItem('gdocs_token_expires');
+  localStorage.removeItem('gdocs_user_email');
+  localStorage.removeItem('gdocs_user_name');
+  localStorage.removeItem('gdocs_user_picture');
+  hideSessionExpiredBanner();
   showAuthScreen();
 }
 
@@ -132,16 +271,51 @@ function showAuthScreen() {
 }
 
 // --- Google API Helper ---
-async function apiFetch(url, options = {}) {
+async function apiFetch(url, options = {}, isRetry = false) {
+  // Если токен скоро истечет, пробуем превентивно обновить его
+  if (accessToken && isTokenExpiringSoon() && !isRetry) {
+    try {
+      await requestFreshToken(false);
+    } catch (_) {}
+  }
+
   const headers = {
     Authorization: `Bearer ${accessToken}`,
     ...(options.headers || {})
   };
 
   const response = await fetch(url, { ...options, headers });
-  if (response.status === 401) {
-    handleLogout();
-    throw new Error('Сессия истекла. Пожалуйста, войдите снова.');
+
+  // При истечении сессии (401) не разлогиниваемся, а пробуем обновить токен и повторить запрос
+  if (response.status === 401 && !isRetry) {
+    console.warn('Токен Google истек (401). Попытка автоматического обновления токена...');
+    try {
+      await requestFreshToken(false);
+      return await apiFetch(url, options, true);
+    } catch (err) {
+      console.warn('Тихое обновление токена не удалось, показываем баннер:', err);
+      showSessionExpiredBanner();
+      throw new Error('Сессия Google истекла. Нажмите «Обновить сессию», чтобы сохранить данные.');
+    }
+  }
+
+  if (response.status === 401 && isRetry) {
+    showSessionExpiredBanner();
+    throw new Error('Сессия истекла. Пожалуйста, обновите вход.');
+  }
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    let errorMsg = `Ошибка API (${response.status}): ${response.statusText}`;
+    try {
+      const errJson = JSON.parse(errorText);
+      if (errJson.error?.message) {
+        errorMsg = errJson.error.message;
+      }
+    } catch (_) {
+      if (errorText) errorMsg += ` - ${errorText}`;
+    }
+    throw new Error(errorMsg);
   }
   return response;
 }
@@ -153,8 +327,15 @@ async function fetchUserProfile() {
     const user = await res.json();
     userName.textContent = user.name || 'Пользователь';
     userEmail.textContent = user.email || '';
+    if (user.email) {
+      localStorage.setItem('gdocs_user_email', user.email);
+    }
+    if (user.name) {
+      localStorage.setItem('gdocs_user_name', user.name);
+    }
     if (user.picture) {
       userAvatar.src = user.picture;
+      localStorage.setItem('gdocs_user_picture', user.picture);
     }
   } catch (err) {
     console.error('Ошибка загрузки профиля:', err);
@@ -208,7 +389,7 @@ async function loadNotes() {
 
 function renderNotesList(filterText = '') {
   notesListEl.innerHTML = '';
-  const filtered = notesList.filter(n => n.name.toLowerCase().includes(filterText.toLowerCase()));
+  const filtered = notesList.filter(n => (n.name || '').toLowerCase().includes(filterText.toLowerCase()));
 
   if (filtered.length === 0) {
     notesListEl.innerHTML = '<li class="status-msg">Заметок пока нет</li>';
@@ -220,12 +401,12 @@ function renderNotesList(filterText = '') {
     li.className = `note-item ${activeNote && activeNote.id === note.id ? 'active' : ''}`;
     li.dataset.noteId = note.id;
     
-    const date = new Date(note.modifiedTime).toLocaleDateString('ru-RU', {
+    const date = note.modifiedTime ? new Date(note.modifiedTime).toLocaleDateString('ru-RU', {
       day: 'numeric',
       month: 'short',
       hour: '2-digit',
       minute: '2-digit'
-    });
+    }) : '';
 
     li.innerHTML = `
       <div class="note-item-title">${escapeHtml(note.name || 'Без названия')}</div>
@@ -239,6 +420,15 @@ function renderNotesList(filterText = '') {
 
 // --- Создание новой заметки ---
 async function createNewNote() {
+  if (activeNote && isDirty && !isLoadingNote) {
+    clearTimeout(saveTimeout);
+    saveTimeout = null;
+    flushCurrentNoteSave();
+  } else {
+    clearTimeout(saveTimeout);
+    saveTimeout = null;
+  }
+
   setSyncStatus('saving', 'Создание заметки...');
   try {
     const defaultTitle = 'Новая заметка';
@@ -254,7 +444,7 @@ async function createNewNote() {
     const newFile = await res.json();
 
     notesList.unshift(newFile);
-    renderNotesList();
+    renderNotesList(searchInput.value);
     await selectNote(newFile);
     noteTitleInput.focus();
     noteTitleInput.select();
@@ -366,6 +556,9 @@ function renderDocToEditor(doc) {
 
 // --- Извлечение текста и диапазонов цветового выделения для сохранения в Google Docs ---
 function extractContentAndHighlights(container) {
+  if (!container || container.classList.contains('editor-disabled')) {
+    return { text: '', highlights: [] };
+  }
   let fullText = '';
   const highlights = [];
 
@@ -449,31 +642,77 @@ function extractContentAndHighlights(container) {
 
 // --- Выбор и загрузка заметки ---
 async function selectNote(note) {
+  if (!note) return;
+
+  // Если кликнули на уже открытую заметку, которая не находится в процессе загрузки - ничего не делаем
+  if (activeNote && activeNote.id === note.id && !isLoadingNote) {
+    return;
+  }
+
+  // 1. Если у текущей открытой заметки есть несохранённые правки - немедленно отправляем их в очередь сохранения
+  if (activeNote && isDirty && !isLoadingNote) {
+    clearTimeout(saveTimeout);
+    saveTimeout = null;
+    flushCurrentNoteSave();
+  } else {
+    clearTimeout(saveTimeout);
+    saveTimeout = null;
+  }
+
+  // 2. Инкрементируем токен загрузки, чтобы отменить/проигнорировать любые запаздывающие ответы от других заметок
+  const currentToken = ++noteLoadToken;
+
   activeNote = note;
+  isLoadingNote = true;
+  isDirty = false;
   renderNotesList(searchInput.value);
 
   editorEmpty.classList.add('hidden');
   editorActive.classList.remove('hidden');
 
-  noteTitleInput.value = note.name;
+  noteTitleInput.value = note.name || '';
   noteBodyInput.innerHTML = '<div style="color: var(--text-light);">Загрузка содержимого...</div>';
   setEditorEditable(false);
   openInDocsBtn.href = note.webViewLink || `https://docs.google.com/document/d/${note.id}/edit`;
 
-  setSyncStatus('saved', 'Загружено');
+  setSyncStatus('saving', 'Загрузка...');
 
   try {
+    // Если для целевой заметки в данный момент ещё идёт фоновое сохранение, ждём его завершения
+    const existingSave = saveQueueByNoteId.get(note.id);
+    if (existingSave?.promise) {
+      await existingSave.promise;
+    }
+
+    // Проверяем, не переключился ли пользователь на другую заметку, пока ждали
+    if (currentToken !== noteLoadToken || activeNote?.id !== note.id) {
+      return;
+    }
+
     const res = await apiFetch(`https://docs.googleapis.com/v1/documents/${note.id}`);
     const doc = await res.json();
+
+    // Повторная проверка актуальности ответа
+    if (currentToken !== noteLoadToken || activeNote?.id !== note.id) {
+      return;
+    }
 
     noteBodyInput.innerHTML = renderDocToEditor(doc);
     setEditorEditable(true);
     setFilter('all');
     updateNoteStats();
+    isLoadingNote = false;
+    isDirty = false;
+    setSyncStatus('saved', 'Загружено');
   } catch (err) {
+    if (currentToken !== noteLoadToken || activeNote?.id !== note.id) {
+      return;
+    }
     console.error('Ошибка чтения Google Docs:', err);
     noteBodyInput.innerHTML = '<div style="color: var(--danger);">Ошибка при чтении документа Google Docs.</div>';
-    setEditorEditable(true);
+    setEditorEditable(false);
+    isLoadingNote = false;
+    isDirty = false;
     setSyncStatus('error', 'Ошибка чтения');
   }
 }
@@ -487,21 +726,75 @@ function setEditorEditable(editable) {
   }
 }
 
-// --- Сохранение изменений в Google Docs ---
-async function saveActiveNote() {
-  if (!activeNote || isSaving) return;
+// --- Управление очередью сохранения и сохранение в Google Docs ---
 
+function hasPendingSave(noteId) {
+  return saveQueueByNoteId.has(noteId);
+}
+
+// Мгновенный сброс текущего состояния открытой заметки в очередь сохранения
+function flushCurrentNoteSave() {
+  if (!activeNote || isLoadingNote || noteBodyInput.classList.contains('editor-disabled')) return null;
+
+  const noteToSave = activeNote;
   const newTitle = noteTitleInput.value.trim() || 'Без названия';
   const { text: newContent, highlights } = extractContentAndHighlights(noteBodyInput);
 
-  isSaving = true;
-  setSyncStatus('saving', 'Сохранение...');
+  isDirty = false;
+  return queueNoteSave(noteToSave, newTitle, newContent, highlights);
+}
+
+// Постановка сохранения заметки в очередь с изоляцией по ID
+function queueNoteSave(noteToSave, newTitle, newContent, highlights) {
+  const noteId = noteToSave.id;
+  let queueItem = saveQueueByNoteId.get(noteId);
+
+  if (queueItem) {
+    // Сохранение этой заметки уже выполняется. Обновляем отложенные данные до самых свежих
+    queueItem.pending = { newTitle, newContent, highlights };
+    return queueItem.promise;
+  }
+
+  // Создаём новую задачу сохранения для этого noteId
+  queueItem = {
+    pending: null,
+    promise: null
+  };
+  saveQueueByNoteId.set(noteId, queueItem);
+
+  if (activeNote?.id === noteId) {
+    setSyncStatus('saving', 'Сохранение...');
+  }
+
+  const runQueue = async (title, content, hls) => {
+    try {
+      await performSave(noteToSave, title, content, hls);
+    } catch (err) {
+      console.error(`Ошибка при сохранении заметки ${noteId}:`, err);
+    }
+
+    if (queueItem.pending) {
+      const next = queueItem.pending;
+      queueItem.pending = null;
+      await runQueue(next.newTitle, next.newContent, next.highlights);
+    } else {
+      saveQueueByNoteId.delete(noteId);
+    }
+  };
+
+  queueItem.promise = runQueue(newTitle, newContent, highlights);
+  return queueItem.promise;
+}
+
+// Непосредственное выполнение сохранения конкретной заметки в Google Docs и Drive
+async function performSave(noteToSave, newTitle, newContent, highlights) {
+  const noteId = noteToSave.id;
 
   try {
     // 1. Получаем текущую длину документа в Google Docs
-    const docRes = await apiFetch(`https://docs.googleapis.com/v1/documents/${activeNote.id}`);
+    const docRes = await apiFetch(`https://docs.googleapis.com/v1/documents/${noteId}`);
     const doc = await docRes.json();
-    const docLength = doc.body.content.slice(-1)[0]?.endIndex || 1;
+    const docLength = doc.body?.content?.slice(-1)[0]?.endIndex || 1;
 
     const requests = [];
 
@@ -567,7 +860,7 @@ async function saveActiveNote() {
 
     // Отправляем пакетное обновление содержимого
     if (requests.length > 0) {
-      await apiFetch(`https://docs.googleapis.com/v1/documents/${activeNote.id}:batchUpdate`, {
+      await apiFetch(`https://docs.googleapis.com/v1/documents/${noteId}:batchUpdate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ requests })
@@ -575,30 +868,74 @@ async function saveActiveNote() {
     }
 
     // 2. Обновляем имя файла на Диске, если заголовок изменился
-    if (newTitle !== activeNote.name) {
-      await apiFetch(`https://www.googleapis.com/drive/v3/files/${activeNote.id}`, {
+    if (newTitle !== noteToSave.name) {
+      await apiFetch(`https://www.googleapis.com/drive/v3/files/${noteId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: newTitle })
       });
-      activeNote.name = newTitle;
+      noteToSave.name = newTitle;
     }
 
-    activeNote.modifiedTime = new Date().toISOString();
+    noteToSave.modifiedTime = new Date().toISOString();
+
+    const listItem = notesList.find(n => n.id === noteId);
+    if (listItem) {
+      listItem.name = newTitle;
+      listItem.modifiedTime = noteToSave.modifiedTime;
+    }
+
     renderNotesList(searchInput.value);
-    setSyncStatus('saved', 'Сохранено');
-    updateNoteStats();
+
+    // Если эта заметка всё ещё открыта в редакторе, обновляем статус и статистику
+    if (activeNote && activeNote.id === noteId) {
+      setSyncStatus('saved', 'Сохранено');
+      updateNoteStats();
+    }
   } catch (err) {
-    console.error('Ошибка сохранения заметки:', err);
-    setSyncStatus('error', 'Ошибка сохранения');
-    showToast('Ошибка сохранения в Google Docs', 'error');
-  } finally {
-    isSaving = false;
+    console.error(`Ошибка сохранения заметки (${noteId}):`, err);
+    if (activeNote && activeNote.id === noteId) {
+      setSyncStatus('error', 'Ошибка сохранения');
+      showToast('Ошибка сохранения в Google Docs', 'error');
+    }
+    throw err;
   }
+}
+
+// Автосохранение активной заметки
+async function saveActiveNote() {
+  if (!activeNote || isLoadingNote) return;
+
+  if (!isDirty && !hasPendingSave(activeNote.id)) {
+    setSyncStatus('saved', 'Сохранено');
+    return;
+  }
+
+  clearTimeout(saveTimeout);
+  saveTimeout = null;
+
+  return flushCurrentNoteSave();
+}
+
+// Ручное сохранение по кнопке "Сохранить", Ctrl+S или из контекстного меню
+function manualSave() {
+  if (!activeNote) {
+    showToast('Нет открытой заметки для сохранения', 'info');
+    return;
+  }
+  if (isLoadingNote) {
+    showToast('Заметка ещё загружается...', 'info');
+    return;
+  }
+  clearTimeout(saveTimeout);
+  saveTimeout = null;
+  saveActiveNote();
 }
 
 // Отложенное сохранение (debounce 1 сек)
 function scheduleSave() {
+  if (!activeNote || isLoadingNote) return;
+  isDirty = true;
   setSyncStatus('saving', 'Сохранение...');
   clearTimeout(saveTimeout);
   saveTimeout = setTimeout(saveActiveNote, 1000);
@@ -607,21 +944,33 @@ function scheduleSave() {
 // --- Удаление заметки ---
 async function deleteActiveNote() {
   if (!activeNote) return;
-  const confirmDelete = confirm(`Удалить заметку "${activeNote.name}"? Она переместится в корзину Google Диска.`);
+  const noteToDelete = activeNote;
+  const confirmDelete = confirm(`Удалить заметку "${noteToDelete.name}"? Она переместится в корзину Google Диска.`);
   if (!confirmDelete) return;
+
+  clearTimeout(saveTimeout);
+  saveTimeout = null;
+  isDirty = false;
+
+  const queueItem = saveQueueByNoteId.get(noteToDelete.id);
+  if (queueItem) {
+    queueItem.pending = null;
+  }
 
   setSyncStatus('saving', 'Удаление...');
   try {
-    await apiFetch(`https://www.googleapis.com/drive/v3/files/${activeNote.id}`, {
+    await apiFetch(`https://www.googleapis.com/drive/v3/files/${noteToDelete.id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ trashed: true })
     });
 
-    notesList = notesList.filter(n => n.id !== activeNote.id);
-    activeNote = null;
-    editorActive.classList.add('hidden');
-    editorEmpty.classList.remove('hidden');
+    notesList = notesList.filter(n => n.id !== noteToDelete.id);
+    if (activeNote?.id === noteToDelete.id) {
+      activeNote = null;
+      editorActive.classList.add('hidden');
+      editorEmpty.classList.remove('hidden');
+    }
     renderNotesList(searchInput.value);
     setSyncStatus('saved', 'Удалено');
     showToast('Заметка перемещена в корзину', 'info');
@@ -634,7 +983,7 @@ async function deleteActiveNote() {
 
 // --- Применение цветового выделения (поддерживает многострочное выделение и нативный Ctrl+Z) ---
 function applyStatus(targetStatus) {
-  if (!activeNote) return;
+  if (!activeNote || isLoadingNote) return;
 
   noteBodyInput.focus();
   const sel = window.getSelection();
@@ -1012,12 +1361,7 @@ customContextMenu.addEventListener('click', async (e) => {
       }
       break;
     case 'save':
-      if (activeNote) {
-        clearTimeout(saveTimeout);
-        saveActiveNote();
-      } else {
-        showToast('Нет открытой заметки для сохранения', 'info');
-      }
+      manualSave();
       break;
     case 'new-note':
       createNewNote();
@@ -1083,6 +1427,10 @@ function escapeHtml(str) {
 
 // --- Обработка вставки чистого текста ---
 noteBodyInput.addEventListener('paste', (e) => {
+  if (isLoadingNote) {
+    e.preventDefault();
+    return;
+  }
   e.preventDefault();
   const text = (e.clipboardData || window.clipboardData).getData('text/plain');
   if (document.queryCommandSupported('insertText')) {
@@ -1102,10 +1450,7 @@ noteBodyInput.addEventListener('paste', (e) => {
 loginBtn.addEventListener('click', handleLogin);
 logoutBtn.addEventListener('click', handleLogout);
 newNoteBtn.addEventListener('click', createNewNote);
-manualSaveBtn.addEventListener('click', () => {
-  clearTimeout(saveTimeout);
-  saveActiveNote();
-});
+manualSaveBtn.addEventListener('click', manualSave);
 deleteNoteBtn.addEventListener('click', deleteActiveNote);
 
 // Кнопки панели форматирования: на mousedown предотвращаем снятие фокуса/выделения, на click применяем статус к выделенному тексту или строке
@@ -1117,8 +1462,12 @@ deleteNoteBtn.addEventListener('click', deleteActiveNote);
   });
 });
 
-noteTitleInput.addEventListener('input', scheduleSave);
+noteTitleInput.addEventListener('input', () => {
+  if (isLoadingNote) return;
+  scheduleSave();
+});
 noteBodyInput.addEventListener('input', () => {
+  if (isLoadingNote) return;
   scheduleSave();
   updateNoteStats();
 });
@@ -1236,13 +1585,7 @@ window.addEventListener('keydown', (e) => {
   if (isCtrlOrMeta && isSKey) {
     e.preventDefault();
     e.stopPropagation();
-
-    if (activeNote) {
-      clearTimeout(saveTimeout);
-      saveActiveNote();
-    } else {
-      showToast('Нет открытой заметки для сохранения', 'info');
-    }
+    manualSave();
     return;
   }
 
@@ -1269,6 +1612,32 @@ window.addEventListener('keydown', (e) => {
     }
   }
 }, { capture: true });
+
+// Автоматическое продление токена во время активной работы пользователя
+let lastActivityCheck = 0;
+function checkAndRenewTokenOnActivity() {
+  const now = Date.now();
+  if (now - lastActivityCheck < 60000) return; // не чаще раза в минуту
+  lastActivityCheck = now;
+
+  if (accessToken && isTokenExpiringSoon()) {
+    console.log('Токен истекает менее чем через 8 минут. Продление сессии по действию пользователя...');
+    requestFreshToken(false).catch(err => {
+      console.warn('Автопродление токена отложено:', err);
+    });
+  }
+}
+
+window.addEventListener('click', checkAndRenewTokenOnActivity, { passive: true });
+window.addEventListener('keydown', checkAndRenewTokenOnActivity, { passive: true });
+
+// Предупреждение перед закрытием вкладки, если есть несохранённые изменения
+window.addEventListener('beforeunload', (e) => {
+  if (isDirty || saveQueueByNoteId.size > 0) {
+    e.preventDefault();
+    e.returnValue = '';
+  }
+});
 
 // Старт приложения
 window.addEventListener('DOMContentLoaded', initGoogleAuth);
