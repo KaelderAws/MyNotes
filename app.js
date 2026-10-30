@@ -1725,8 +1725,12 @@ window.addEventListener('beforeunload', (e) => {
   }
 });
 
-// --- Интерактивный маскот (Popcat эффект) ---
+// --- Интерактивный маскот (Popcat эффект + rzhunemogu.ru API) ---
 const mascotContainer = document.getElementById('mascot-container');
+const mascotBubble = document.getElementById('mascot-bubble');
+const mascotBubbleText = document.getElementById('mascot-bubble-text');
+const mascotBubbleClose = document.getElementById('mascot-bubble-close');
+
 if (mascotContainer) {
   const popSounds = ['pop1.mp3', 'pop2.mp3', 'pop3.mp3', 'pop4.mp3'].map(src => {
     const audio = new Audio(src);
@@ -1749,6 +1753,135 @@ if (mascotContainer) {
     } catch (_) {}
   }
 
+  // Очередь предзагруженных шуток (CType 15: пошлые приколы, CType 18: пошлые статусы)
+  const jokeQueue = [];
+  let isPrefetching = false;
+  let bubbleTimer = null;
+  let isHoveringBubble = false;
+
+  function scheduleBubbleHide(delayMs = 14000) {
+    if (bubbleTimer) clearTimeout(bubbleTimer);
+    if (isHoveringBubble) return; // не закрываем, пока курсор над облачком
+    bubbleTimer = setTimeout(hideBubble, delayMs);
+  }
+
+  function cleanJokeText(text) {
+    if (!text) return '';
+    return text
+      .replace(/^\d+\s*\(сохранена\s+[^)]+\)\s*/i, '') // убираем дату и id цитатника
+      .trim();
+  }
+
+  async function fetchJokeItem() {
+    const ctype = Math.random() < 0.5 ? 15 : 18;
+    const res = await fetch(`https://rzhunemogu.ru/api/randjson?CType=${ctype}`, {
+      cache: 'no-store'
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (!data || !data.content) throw new Error('Пустой ответ API');
+    return {
+      text: cleanJokeText(data.content)
+    };
+  }
+
+  async function prefetchJokes() {
+    if (isPrefetching || jokeQueue.length >= 3) return;
+    isPrefetching = true;
+    try {
+      const item = await fetchJokeItem();
+      jokeQueue.push(item);
+    } catch (err) {
+      console.warn('Не удалось предзагрузить шутку с rzhunemogu:', err);
+    } finally {
+      isPrefetching = false;
+      if (jokeQueue.length < 2) {
+        setTimeout(prefetchJokes, 600);
+      }
+    }
+  }
+
+  // Запуск фоновой предзагрузки
+  prefetchJokes();
+
+  function hideBubble() {
+    if (!mascotBubble) return;
+    mascotBubble.classList.add('hidden');
+    if (mascotContainer) {
+      mascotContainer.setAttribute('title', 'Нажми на меня :3');
+    }
+    if (bubbleTimer) {
+      clearTimeout(bubbleTimer);
+      bubbleTimer = null;
+    }
+  }
+
+  async function triggerMascotJoke() {
+    if (!mascotBubble || !mascotBubbleText) return;
+
+    if (bubbleTimer) clearTimeout(bubbleTimer);
+    if (mascotContainer) {
+      mascotContainer.removeAttribute('title');
+    }
+
+    let item = jokeQueue.shift();
+    if (!item) {
+      mascotBubbleText.textContent = 'Котик вспоминает пошлый прикол...';
+      mascotBubble.classList.remove('hidden');
+      mascotBubble.classList.remove('bubble-bounce');
+      void mascotBubble.offsetWidth;
+      mascotBubble.classList.add('bubble-bounce');
+
+      try {
+        item = await fetchJokeItem();
+      } catch (err) {
+        item = {
+          text: 'Хотел рассказать пошлый прикол, но интернет временно отвалился... Придётся просто поцеловать тебя :3'
+        };
+      }
+    }
+
+    mascotBubbleText.textContent = item.text;
+    mascotBubble.classList.remove('hidden');
+    mascotBubble.classList.remove('bubble-bounce');
+    void mascotBubble.offsetWidth;
+    mascotBubble.classList.add('bubble-bounce');
+
+    // Предзагружаем следующую шутку
+    prefetchJokes();
+
+    // Автоскрытие через 14 секунд (если курсор не над облачком)
+    scheduleBubbleHide(14000);
+  }
+
+  if (mascotBubbleClose) {
+    mascotBubbleClose.addEventListener('click', (e) => {
+      e.stopPropagation();
+      hideBubble();
+    });
+  }
+
+  if (mascotBubble) {
+    mascotBubble.addEventListener('pointerenter', () => {
+      isHoveringBubble = true;
+      if (bubbleTimer) {
+        clearTimeout(bubbleTimer);
+        bubbleTimer = null;
+      }
+    });
+
+    mascotBubble.addEventListener('pointerleave', () => {
+      isHoveringBubble = false;
+      if (!mascotBubble.classList.contains('hidden')) {
+        scheduleBubbleHide(8000); // 8 секунд после ухода курсора
+      }
+    });
+
+    mascotBubble.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+    });
+  }
+
   let isMascotPressed = false;
 
   function openMascot(e) {
@@ -1757,6 +1890,7 @@ if (mascotContainer) {
     isMascotPressed = true;
     mascotContainer.classList.add('is-open');
     playPopSound();
+    triggerMascotJoke();
   }
 
   function closeMascot() {
